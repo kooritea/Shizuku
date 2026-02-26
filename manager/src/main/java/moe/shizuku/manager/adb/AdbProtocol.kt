@@ -19,4 +19,10 @@ object AdbProtocol {
     const val ADB_AUTH_TOKEN = 1
     const val ADB_AUTH_SIGNATURE = 2
     const val ADB_AUTH_RSAPUBLICKEY = 3
+
+    const val FORWARD_LOCAL_TCP_PREFIX = "tcp:"
+    const val FORWARD_REMOTE_TCP_PREFIX = "tcp:"
+    const val FORWARD_COMMAND_CREATE = "host:forward:"
+    const val FORWARD_COMMAND_REMOVE = "host:killforward:"
+    const val FORWARD_COMMAND_LIST = "host:listforward:"
 }

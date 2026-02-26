@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- 允许 127.0.0.1 的明文 HTTP 流量 -->
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <!-- 如果需要，也可以添加 localhost -->
+        <domain includeSubdomains="true">localhost</domain>
+    </domain-config>
+</network-security-config>
