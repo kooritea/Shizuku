@@ -6,10 +6,12 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.shizuku.manager.utils.CdpInjection
 import rikka.lifecycle.Resource
+import rikka.shizuku.Shizuku
 
 class InjectVConsoleViewModel : ViewModel() {
 
@@ -21,11 +23,23 @@ class InjectVConsoleViewModel : ViewModel() {
     fun start(context: Context) {
         if (_output.value != null) return
 
-        sb.append("正在发现可调试的 WebView...").append('\n')
+        sb.append("正在检查无线调试状态...").append('\n')
         postResult()
 
         viewModelScope.launch {
             try {
+                val adbEnabled = withContext(Dispatchers.IO) { ensureWirelessDebugging() }
+                if (!adbEnabled) {
+                    sb.append("无法开启无线调试，请手动在开发者选项中开启。").append('\n')
+                    postResult()
+                    return@launch
+                }
+                sb.append("无线调试已开启。").append('\n')
+                postResult()
+
+                sb.append('\n').append("正在发现可调试的 WebView...").append('\n')
+                postResult()
+
                 val pids = withContext(Dispatchers.IO) {
                     CdpInjection.discoverWebViews()
                 }
@@ -59,6 +73,41 @@ class InjectVConsoleViewModel : ViewModel() {
                 postResult(e)
             }
         }
+    }
+
+    private suspend fun ensureWirelessDebugging(): Boolean {
+        // 检查当前无线调试状态
+        fun isWirelessAdbEnabled(): Boolean {
+            return try {
+                val process = Shizuku.newProcess(
+                    arrayOf("settings", "get", "global", "adb_wifi_enabled"), null, null
+                )
+                val output = process.inputStream.bufferedReader().readText().trim()
+                process.waitFor()
+                output == "1"
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        if (isWirelessAdbEnabled()) return true
+
+        // 通过 Shizuku 的 adb 权限开启无线调试
+        try {
+            val process = Shizuku.newProcess(
+                arrayOf("settings", "put", "global", "adb_wifi_enabled", "1"), null, null
+            )
+            process.waitFor()
+        } catch (e: Exception) {
+            return false
+        }
+
+        // 等待设置生效
+        repeat(10) {
+            delay(500)
+            if (isWirelessAdbEnabled()) return true
+        }
+        return false
     }
 
     private fun postResult(throwable: Throwable? = null) {
