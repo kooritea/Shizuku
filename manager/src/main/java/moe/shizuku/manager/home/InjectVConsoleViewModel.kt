@@ -23,19 +23,22 @@ class InjectVConsoleViewModel : ViewModel() {
     fun start(context: Context) {
         if (_output.value != null) return
 
-        sb.append("正在检查无线调试状态...").append('\n')
-        postResult()
-
         viewModelScope.launch {
             try {
-                val adbEnabled = withContext(Dispatchers.IO) { ensureWirelessDebugging() }
-                if (!adbEnabled) {
-                    sb.append("无法开启无线调试，请手动在开发者选项中开启。").append('\n')
+                val isAdbMode = Shizuku.getUid() != 0
+                if (isAdbMode) {
+                    sb.append("正在检查无线调试状态...").append('\n')
                     postResult()
-                    return@launch
+
+                    val adbEnabled = withContext(Dispatchers.IO) { ensureWirelessDebugging() }
+                    if (!adbEnabled) {
+                        sb.append("无法开启无线调试，请手动在开发者选项中开启。").append('\n')
+                        postResult()
+                        return@launch
+                    }
+                    sb.append("无线调试已开启。").append('\n')
+                    postResult()
                 }
-                sb.append("无线调试已开启。").append('\n')
-                postResult()
 
                 sb.append('\n').append("正在发现可调试的 WebView...").append('\n')
                 postResult()

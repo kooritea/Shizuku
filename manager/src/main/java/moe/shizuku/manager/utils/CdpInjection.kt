@@ -79,10 +79,55 @@ object CdpInjection {
     }
 
     suspend fun injectVConsole(context: Context, pid: Int): Pair<Boolean, String?> {
+        return if (Shizuku.getUid() == 0) {
+            injectVConsoleViaRoot(context, pid)
+        } else {
+            injectVConsoleViaAdb(context, pid)
+        }
+    }
+
+    /**
+     * Root 模式：通过 Shizuku 以 root 身份启动 SocketForwarder 进程，
+     * 在 root 上下文中创建 TCP 代理桥接到 WebView 的抽象域套接字，绕过 SELinux 限制。
+     */
+    private suspend fun injectVConsoleViaRoot(context: Context, pid: Int): Pair<Boolean, String?> {
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val socketName = "webview_devtools_remote_$pid"
+            val apkPath = context.applicationInfo.sourceDir
+            val process = try {
+                Shizuku.newProcess(
+                    arrayOf(
+                        "app_process",
+                        "-Djava.class.path=$apkPath",
+                        "/system/bin",
+                        "moe.shizuku.manager.utils.SocketForwarder",
+                        socketName
+                    ), null, null
+                )
+            } catch (e: Exception) {
+                return@withContext false to "Failed to start forwarder: ${e.message}"
+            }
+            try {
+                val reader = process.inputStream.bufferedReader()
+                val portLine = reader.readLine()
+                    ?: return@withContext false to "Forwarder process exited without output"
+                val localPort = portLine.trim().toIntOrNull()
+                    ?: return@withContext false to "Invalid port from forwarder: $portLine"
+
+                performCdpInjection(localPort, pid)
+            } finally {
+                process.destroy()
+            }
+        }
+    }
+
+    /**
+     * ADB 模式：通过 ADB 端口转发连接到 WebView 的抽象域套接字。
+     */
+    private suspend fun injectVConsoleViaAdb(context: Context, pid: Int): Pair<Boolean, String?> {
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             val host = "127.0.0.1"
             val port = run {
-                // 优先通过 uid 2000 (adbd) 获取端口
                 val uidPort = discoverAdbPortByUid()
                 if (uidPort > 0) return@run uidPort
 
@@ -100,7 +145,7 @@ object CdpInjection {
                 }
             }
             val pref = ShizukuSettings.getPreferences()
-            
+
             val key = try {
                 AdbKey(PreferenceAdbKeyStore(pref), "shizuku")
             } catch (e: Exception) {
@@ -114,30 +159,7 @@ object CdpInjection {
                 val localPort = java.net.ServerSocket(0).use { it.localPort }
                 val remoteDestination = "localabstract:webview_devtools_remote_$pid"
                 adbClient.createForward(localPort, remoteDestination).use {
-                    val pages = try {
-                        getCdpPages(localPort)
-                    } catch (e: Exception) {
-                        return@withContext false to "Failed to fetch CDP pages from localhost:$localPort (is everything running?): ${e.message}"
-                    }
-
-                    if (pages.isEmpty()) {
-                        return@withContext false to "No inspectable pages found in PID $pid (tried localhost:$localPort)"
-                    }
-                    val results = mutableListOf<String>()
-                    var success = false
-                    for (page in pages) {
-                        val pageUrl = (page["url"] as? String).orEmpty()
-                        if (!pageUrl.startsWith("http://") && !pageUrl.startsWith("https://")) continue
-                        val wsUrl = page["webSocketDebuggerUrl"] as? String ?: continue
-                        try {
-                            injectJsIntoPage(wsUrl, JS_SCRIPT)
-                            results.add("Injected into ${page["title"] ?: wsUrl}")
-                            success = true
-                        } catch (e: Exception) {
-                            results.add("Failed to inject into $wsUrl: ${e.message}")
-                        }
-                    }
-                    success to (if (results.isEmpty()) "No suitable pages for injection" else results.joinToString("\n"))
+                    performCdpInjection(localPort, pid)
                 }
             } catch (e: Exception) {
                 false to "ADB error or injection failed: ${e.message}"
@@ -145,6 +167,33 @@ object CdpInjection {
                 adbClient.close()
             }
         }
+    }
+
+    private fun performCdpInjection(localPort: Int, pid: Int): Pair<Boolean, String?> {
+        val pages = try {
+            getCdpPages(localPort)
+        } catch (e: Exception) {
+            return false to "Failed to fetch CDP pages from localhost:$localPort: ${e.message}"
+        }
+
+        if (pages.isEmpty()) {
+            return false to "No inspectable pages found in PID $pid (tried localhost:$localPort)"
+        }
+        val results = mutableListOf<String>()
+        var success = false
+        for (page in pages) {
+            val pageUrl = (page["url"] as? String).orEmpty()
+            if (!pageUrl.startsWith("http://") && !pageUrl.startsWith("https://")) continue
+            val wsUrl = page["webSocketDebuggerUrl"] as? String ?: continue
+            try {
+                injectJsIntoPage(wsUrl, JS_SCRIPT)
+                results.add("Injected into ${page["title"] ?: wsUrl}")
+                success = true
+            } catch (e: Exception) {
+                results.add("Failed to inject into $wsUrl: ${e.message}")
+            }
+        }
+        return success to (if (results.isEmpty()) "No suitable pages for injection" else results.joinToString("\n"))
     }
 
     private fun getCdpPages(port: Int): List<Map<String, Any>> {
