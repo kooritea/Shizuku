@@ -10,76 +10,91 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.shizuku.manager.utils.CdpInjection
-import rikka.lifecycle.Resource
+import moe.shizuku.manager.utils.CdpPage
 import rikka.shizuku.Shizuku
+
+sealed class VConsoleUiState {
+    object Loading : VConsoleUiState()
+    data class PageList(val pages: List<CdpPage>) : VConsoleUiState()
+    data class Injecting(val selected: List<CdpPage>) : VConsoleUiState()
+    data class InjectionResult(val results: List<Pair<CdpPage, Boolean>>) : VConsoleUiState()
+    data class Error(val message: String) : VConsoleUiState()
+}
 
 class InjectVConsoleViewModel : ViewModel() {
 
-    private val sb = StringBuilder()
-    private val _output = MutableLiveData<Resource<StringBuilder>>()
+    private val _uiState = MutableLiveData<VConsoleUiState>()
+    val uiState: LiveData<VConsoleUiState> = _uiState
 
-    val output = _output as LiveData<Resource<StringBuilder>>
+    private val _statusMessage = MutableLiveData<String>()
+    val statusMessage: LiveData<String> = _statusMessage
 
-    fun start(context: Context) {
-        if (_output.value != null) return
+    fun discoverPages(context: Context) {
+        if (_uiState.value is VConsoleUiState.Loading) return
+
+        _uiState.value = VConsoleUiState.Loading
 
         viewModelScope.launch {
             try {
                 val isAdbMode = Shizuku.getUid() != 0
                 if (isAdbMode) {
-                    sb.append("正在检查无线调试状态...").append('\n')
-                    postResult()
-
+                    _statusMessage.postValue("正在检查无线调试状态...")
                     val adbEnabled = withContext(Dispatchers.IO) { ensureWirelessDebugging() }
                     if (!adbEnabled) {
-                        sb.append("无法开启无线调试，请手动在开发者选项中开启。").append('\n')
-                        postResult()
+                        _uiState.postValue(VConsoleUiState.Error("无法开启无线调试，请手动在开发者选项中开启。"))
                         return@launch
                     }
-                    sb.append("无线调试已开启。").append('\n')
-                    postResult()
                 }
 
-                sb.append('\n').append("正在发现可调试的 WebView...").append('\n')
-                postResult()
+                _statusMessage.postValue("正在发现可调试的 WebView...")
 
                 val pids = withContext(Dispatchers.IO) {
                     CdpInjection.discoverWebViews()
                 }
 
                 if (pids.isEmpty()) {
-                    sb.append('\n').append("未发现可调试的 WebView。").append('\n')
-                    postResult()
+                    _uiState.postValue(VConsoleUiState.Error("未发现可调试的 WebView。"))
                     return@launch
                 }
 
-                sb.append("发现 ${pids.size} 个 WebView 进程: ${pids.joinToString(", ")}").append('\n')
-                postResult()
+                _statusMessage.postValue("发现 ${pids.size} 个 WebView 进程，正在获取页面列表...")
 
+                val allPages = mutableListOf<CdpPage>()
                 for (pid in pids) {
-                    sb.append('\n').append("正在向 PID $pid 注入 vConsole...").append('\n')
-                    postResult()
-
-                    val (success, message) = CdpInjection.injectVConsole(context, pid)
-                    if (success) {
-                        sb.append("PID $pid: 注入成功\n$message").append('\n')
-                    } else {
-                        sb.append("PID $pid: 注入失败\n$message").append('\n')
+                    try {
+                        val pages = CdpInjection.discoverPages(context, pid)
+                        allPages.addAll(pages)
+                    } catch (e: Exception) {
+                        // 跳过无法访问的进程
                     }
-                    postResult()
                 }
 
-                sb.append('\n').append("所有注入操作已完成。").append('\n')
-                postResult()
+                if (allPages.isEmpty()) {
+                    _uiState.postValue(VConsoleUiState.Error("未发现可注入的页面。所有 WebView 进程中没有 HTTP/HTTPS 页面。"))
+                    return@launch
+                }
+
+                _uiState.postValue(VConsoleUiState.PageList(allPages))
             } catch (e: Exception) {
-                sb.append('\n').append("发生错误: ${e.message}").append('\n')
-                postResult(e)
+                _uiState.postValue(VConsoleUiState.Error("发生错误: ${e.message}"))
+            }
+        }
+    }
+
+    fun injectSelected(context: Context, selectedPages: List<CdpPage>) {
+        _uiState.value = VConsoleUiState.Injecting(selectedPages)
+
+        viewModelScope.launch {
+            try {
+                val results = CdpInjection.injectIntoPages(context, selectedPages)
+                _uiState.postValue(VConsoleUiState.InjectionResult(results))
+            } catch (e: Exception) {
+                _uiState.postValue(VConsoleUiState.Error("注入失败: ${e.message}"))
             }
         }
     }
 
     private suspend fun ensureWirelessDebugging(): Boolean {
-        // 检查当前无线调试状态
         fun isWirelessAdbEnabled(): Boolean {
             return try {
                 val process = Shizuku.newProcess(
@@ -95,7 +110,6 @@ class InjectVConsoleViewModel : ViewModel() {
 
         if (isWirelessAdbEnabled()) return true
 
-        // 通过 Shizuku 的 adb 权限开启无线调试
         try {
             val process = Shizuku.newProcess(
                 arrayOf("settings", "put", "global", "adb_wifi_enabled", "1"), null, null
@@ -105,18 +119,10 @@ class InjectVConsoleViewModel : ViewModel() {
             return false
         }
 
-        // 等待设置生效
         repeat(10) {
             delay(500)
             if (isWirelessAdbEnabled()) return true
         }
         return false
-    }
-
-    private fun postResult(throwable: Throwable? = null) {
-        if (throwable == null)
-            _output.postValue(Resource.success(sb))
-        else
-            _output.postValue(Resource.error(throwable, sb))
     }
 }

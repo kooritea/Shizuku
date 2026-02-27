@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Build
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import moe.shizuku.manager.ShizukuSettings
 import moe.shizuku.manager.adb.AdbClient
@@ -13,10 +15,18 @@ import moe.shizuku.manager.adb.PreferenceAdbKeyStore
 import rikka.shizuku.Shizuku
 import java.util.regex.Pattern
 
+data class CdpPage(
+    val pid: Int,
+    val processName: String,
+    val pageId: String,
+    val title: String,
+    val url: String
+)
+
 object CdpInjection {
 
     private const val JS_SCRIPT = """
-        (function(){fetch("https://unpkg.com/vconsole@latest/dist/vconsole.min.js").then(r=>r.text()).then(eval).then(()=>{new VConsole()});})()
+        (function(){fetch("https://unpkg.com/vconsole@latest/dist/vconsole.min.js").then(r=>r.text()).then(eval).then(()=>{new VConsole();})})()
     """
 
     fun discoverWebViews(): List<Int> {
@@ -35,22 +45,224 @@ object CdpInjection {
         return pids.distinct()
     }
 
+    fun getProcessName(pid: Int): String {
+        return try {
+            val process = Shizuku.newProcess(arrayOf("cat", "/proc/$pid/cmdline"), null, null)
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            output.trim().replace("\u0000", "").ifEmpty { "PID $pid" }
+        } catch (e: Exception) {
+            "PID $pid"
+        }
+    }
+
     /**
-     * 通过 /proc/net/tcp6 查找 uid 2000 (AID_SHELL/adbd) 正在监听的 TCP 端口
+     * 发现指定 PID 的所有可注入页面
      */
+    suspend fun discoverPages(context: Context, pid: Int): List<CdpPage> {
+        val processName = withContext(Dispatchers.IO) { getProcessName(pid) }
+        return if (Shizuku.getUid() == 0) {
+            discoverPagesViaRoot(context, pid, processName)
+        } else {
+            discoverPagesViaAdb(context, pid, processName)
+        }
+    }
+
+    private suspend fun discoverPagesViaRoot(context: Context, pid: Int, processName: String): List<CdpPage> {
+        return withContext(Dispatchers.IO) {
+            withPortForwardingRoot(context, pid) { localPort ->
+                fetchCdpPages(localPort, pid, processName)
+            }
+        }
+    }
+
+    private suspend fun discoverPagesViaAdb(context: Context, pid: Int, processName: String): List<CdpPage> {
+        return withContext(Dispatchers.IO) {
+            withPortForwardingAdb(context, pid) { localPort ->
+                fetchCdpPages(localPort, pid, processName)
+            }
+        }
+    }
+
+    /**
+     * 向选中的页面注入 vConsole（按 PID 分组处理）
+     */
+    suspend fun injectIntoPages(context: Context, pages: List<CdpPage>): List<Pair<CdpPage, Boolean>> {
+        val results = mutableListOf<Pair<CdpPage, Boolean>>()
+        val grouped = pages.groupBy { it.pid }
+        for ((pid, pagesForPid) in grouped) {
+            val pageIds = pagesForPid.map { it.pageId }.toSet()
+            if (Shizuku.getUid() == 0) {
+                injectPagesViaRoot(context, pid, pageIds, pagesForPid, results)
+            } else {
+                injectPagesViaAdb(context, pid, pageIds, pagesForPid, results)
+            }
+        }
+        return results
+    }
+
+    private suspend fun injectPagesViaRoot(
+        context: Context, pid: Int, pageIds: Set<String>,
+        originalPages: List<CdpPage>, results: MutableList<Pair<CdpPage, Boolean>>
+    ) {
+        withContext(Dispatchers.IO) {
+            try {
+                withPortForwardingRoot(context, pid) { localPort ->
+                    injectMatchingPages(localPort, pageIds, originalPages, results)
+                }
+            } catch (e: Exception) {
+                originalPages.forEach { results.add(it to false) }
+            }
+        }
+    }
+
+    private suspend fun injectPagesViaAdb(
+        context: Context, pid: Int, pageIds: Set<String>,
+        originalPages: List<CdpPage>, results: MutableList<Pair<CdpPage, Boolean>>
+    ) {
+        withContext(Dispatchers.IO) {
+            try {
+                withPortForwardingAdb(context, pid) { localPort ->
+                    injectMatchingPages(localPort, pageIds, originalPages, results)
+                }
+            } catch (e: Exception) {
+                originalPages.forEach { results.add(it to false) }
+            }
+        }
+    }
+
+    private fun injectMatchingPages(
+        localPort: Int, pageIds: Set<String>,
+        originalPages: List<CdpPage>, results: MutableList<Pair<CdpPage, Boolean>>
+    ) {
+        val liveCdpPages = try {
+            getRawCdpPages(localPort)
+        } catch (e: Exception) {
+            originalPages.forEach { results.add(it to false) }
+            return
+        }
+        for (page in originalPages) {
+            val livePage = liveCdpPages.find { (it["id"] as? String) == page.pageId }
+            if (livePage == null) {
+                results.add(page to false)
+                continue
+            }
+            val wsUrl = livePage["webSocketDebuggerUrl"] as? String
+            if (wsUrl == null) {
+                results.add(page to false)
+                continue
+            }
+            try {
+                injectJsIntoPage(wsUrl, JS_SCRIPT)
+                results.add(page to true)
+            } catch (e: Exception) {
+                results.add(page to false)
+            }
+        }
+    }
+
+    // ---- 端口转发（Root） ----
+
+    private fun <T> withPortForwardingRoot(context: Context, pid: Int, block: (Int) -> T): T {
+        val socketName = "webview_devtools_remote_$pid"
+        val apkPath = context.applicationInfo.sourceDir
+        val process = Shizuku.newProcess(
+            arrayOf(
+                "app_process",
+                "-Djava.class.path=$apkPath",
+                "/system/bin",
+                "moe.shizuku.manager.utils.SocketForwarder",
+                socketName
+            ), null, null
+        )
+        return try {
+            val reader = process.inputStream.bufferedReader()
+            val portLine = reader.readLine() ?: throw Exception("Forwarder process exited without output")
+            val localPort = portLine.trim().toIntOrNull()
+                ?: throw Exception("Invalid port from forwarder: $portLine")
+            block(localPort)
+        } finally {
+            process.destroy()
+        }
+    }
+
+    // ---- 端口转发（ADB） ----
+
+    private suspend fun <T> withPortForwardingAdb(context: Context, pid: Int, block: (Int) -> T): T {
+        val host = "127.0.0.1"
+        val port = run {
+            val uidPort = discoverAdbPortByUid()
+            if (uidPort > 0) return@run uidPort
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                discoverAdbPort(context)
+            } else {
+                val p = EnvironmentUtils.getAdbTcpPort()
+                if (p <= 0) throw Exception("ADB TCP port not found")
+                p
+            }
+        }
+        val pref = ShizukuSettings.getPreferences()
+        val key = AdbKey(PreferenceAdbKeyStore(pref), "shizuku")
+        val adbClient = AdbClient(host, port, key)
+        return try {
+            adbClient.connect()
+            val localPort = java.net.ServerSocket(0).use { it.localPort }
+            val remoteDestination = "localabstract:webview_devtools_remote_$pid"
+            adbClient.createForward(localPort, remoteDestination).use {
+                block(localPort)
+            }
+        } finally {
+            adbClient.close()
+        }
+    }
+
+    // ---- 保留向后兼容的旧接口 ----
+
+    suspend fun injectVConsole(context: Context, pid: Int): Pair<Boolean, String?> {
+        return if (Shizuku.getUid() == 0) {
+            injectVConsoleViaRoot(context, pid)
+        } else {
+            injectVConsoleViaAdb(context, pid)
+        }
+    }
+
+    private suspend fun injectVConsoleViaRoot(context: Context, pid: Int): Pair<Boolean, String?> {
+        return withContext(Dispatchers.IO) {
+            try {
+                withPortForwardingRoot(context, pid) { localPort ->
+                    performCdpInjection(localPort, pid)
+                }
+            } catch (e: Exception) {
+                false to "Failed: ${e.message}"
+            }
+        }
+    }
+
+    private suspend fun injectVConsoleViaAdb(context: Context, pid: Int): Pair<Boolean, String?> {
+        return withContext(Dispatchers.IO) {
+            try {
+                withPortForwardingAdb(context, pid) { localPort ->
+                    performCdpInjection(localPort, pid)
+                }
+            } catch (e: Exception) {
+                false to "ADB error or injection failed: ${e.message}"
+            }
+        }
+    }
+
+    // ---- 内部工具方法 ----
+
     private fun discoverAdbPortByUid(): Int {
         try {
             val process = Shizuku.newProcess(arrayOf("cat", "/proc/net/tcp6"), null, null)
             val output = process.inputStream.bufferedReader().readText()
-            // /proc/net/tcp6 格式: sl local_address remote_address st ... uid
-            // LISTEN 状态 st=0A, uid=2000 是 adbd
             for (line in output.lines()) {
                 val fields = line.trim().split("\\s+".toRegex())
                 if (fields.size < 8) continue
                 val st = fields[3]
                 val uid = fields[7]
                 if (st == "0A" && uid == "2000") {
-                    // local_address 格式为 hex_ip:hex_port
                     val portHex = fields[1].substringAfterLast(":")
                     val port = portHex.toIntOrNull(16) ?: continue
                     if (port in 1..65535) return port
@@ -78,100 +290,52 @@ object CdpInjection {
         }
     }
 
-    suspend fun injectVConsole(context: Context, pid: Int): Pair<Boolean, String?> {
-        return if (Shizuku.getUid() == 0) {
-            injectVConsoleViaRoot(context, pid)
-        } else {
-            injectVConsoleViaAdb(context, pid)
+    private fun fetchCdpPages(localPort: Int, pid: Int, processName: String): List<CdpPage> {
+        val rawPages = getRawCdpPages(localPort)
+        return rawPages.mapNotNull { page ->
+            val pageUrl = (page["url"] as? String).orEmpty()
+            if (!pageUrl.startsWith("http://") && !pageUrl.startsWith("https://")) return@mapNotNull null
+            val pageId = (page["id"] as? String) ?: return@mapNotNull null
+            CdpPage(
+                pid = pid,
+                processName = processName,
+                pageId = pageId,
+                title = (page["title"] as? String).orEmpty(),
+                url = pageUrl
+            )
         }
     }
 
-    /**
-     * Root 模式：通过 Shizuku 以 root 身份启动 SocketForwarder 进程，
-     * 在 root 上下文中创建 TCP 代理桥接到 WebView 的抽象域套接字，绕过 SELinux 限制。
-     */
-    private suspend fun injectVConsoleViaRoot(context: Context, pid: Int): Pair<Boolean, String?> {
-        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val socketName = "webview_devtools_remote_$pid"
-            val apkPath = context.applicationInfo.sourceDir
-            val process = try {
-                Shizuku.newProcess(
-                    arrayOf(
-                        "app_process",
-                        "-Djava.class.path=$apkPath",
-                        "/system/bin",
-                        "moe.shizuku.manager.utils.SocketForwarder",
-                        socketName
-                    ), null, null
-                )
-            } catch (e: Exception) {
-                return@withContext false to "Failed to start forwarder: ${e.message}"
-            }
-            try {
-                val reader = process.inputStream.bufferedReader()
-                val portLine = reader.readLine()
-                    ?: return@withContext false to "Forwarder process exited without output"
-                val localPort = portLine.trim().toIntOrNull()
-                    ?: return@withContext false to "Invalid port from forwarder: $portLine"
-
-                performCdpInjection(localPort, pid)
-            } finally {
-                process.destroy()
-            }
-        }
-    }
-
-    /**
-     * ADB 模式：通过 ADB 端口转发连接到 WebView 的抽象域套接字。
-     */
-    private suspend fun injectVConsoleViaAdb(context: Context, pid: Int): Pair<Boolean, String?> {
-        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val host = "127.0.0.1"
-            val port = run {
-                val uidPort = discoverAdbPortByUid()
-                if (uidPort > 0) return@run uidPort
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    try {
-                        discoverAdbPort(context)
-                    } catch (e: Exception) {
-                        return@withContext false to "Failed to discover ADB port: ${e.message}"
+    private fun getRawCdpPages(port: Int): List<Map<String, Any>> {
+        val url = java.net.URL("http://127.0.0.1:$port/json/list")
+        val connection = url.openConnection() as java.net.HttpURLConnection
+        return try {
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.inputStream.bufferedReader().use { reader ->
+                val response = reader.readText()
+                val jsonArray = org.json.JSONArray(response)
+                val pages = mutableListOf<Map<String, Any>>()
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    val page = mutableMapOf<String, Any>()
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        page[key] = obj.get(key)
                     }
-                } else {
-                    val p = EnvironmentUtils.getAdbTcpPort()
-                    if (p <= 0) {
-                        return@withContext false to "ADB TCP port not found"
-                    } else p
+                    pages.add(page)
                 }
+                pages
             }
-            val pref = ShizukuSettings.getPreferences()
-
-            val key = try {
-                AdbKey(PreferenceAdbKeyStore(pref), "shizuku")
-            } catch (e: Exception) {
-                return@withContext false to "Failed to get ADB key: ${e.message}"
-            }
-
-            val adbClient = AdbClient(host, port, key)
-            try {
-                adbClient.connect()
-
-                val localPort = java.net.ServerSocket(0).use { it.localPort }
-                val remoteDestination = "localabstract:webview_devtools_remote_$pid"
-                adbClient.createForward(localPort, remoteDestination).use {
-                    performCdpInjection(localPort, pid)
-                }
-            } catch (e: Exception) {
-                false to "ADB error or injection failed: ${e.message}"
-            } finally {
-                adbClient.close()
-            }
+        } finally {
+            connection.disconnect()
         }
     }
 
     private fun performCdpInjection(localPort: Int, pid: Int): Pair<Boolean, String?> {
         val pages = try {
-            getCdpPages(localPort)
+            getRawCdpPages(localPort)
         } catch (e: Exception) {
             return false to "Failed to fetch CDP pages from localhost:$localPort: ${e.message}"
         }
@@ -194,31 +358,6 @@ object CdpInjection {
             }
         }
         return success to (if (results.isEmpty()) "No suitable pages for injection" else results.joinToString("\n"))
-    }
-
-    private fun getCdpPages(port: Int): List<Map<String, Any>> {
-        val url = java.net.URL("http://127.0.0.1:$port/json/list")
-        val connection = url.openConnection() as java.net.HttpURLConnection
-        return try {
-            connection.inputStream.bufferedReader().use { reader ->
-                val response = reader.readText()
-                val jsonArray = org.json.JSONArray(response)
-                val pages = mutableListOf<Map<String, Any>>()
-                for (i in 0 until jsonArray.length()) {
-                    val obj = jsonArray.getJSONObject(i)
-                    val page = mutableMapOf<String, Any>()
-                    val keys = obj.keys()
-                    while (keys.hasNext()) {
-                        val key = keys.next()
-                        page[key] = obj.get(key)
-                    }
-                    pages.add(page)
-                }
-                pages
-            }
-        } finally {
-            connection.disconnect()
-        }
     }
 
     private fun injectJsIntoPage(wsUrl: String, script: String) {
@@ -246,7 +385,7 @@ object CdpInjection {
             val buffer = ByteArray(8192)
             val read = `is`.read(buffer)
             if (read == -1) throw Exception("Server closed connection during handshake")
-            
+
             val response = String(buffer, 0, read)
 
             if (!response.contains("101 Switching Protocols") && !response.contains("WebSocket Protocol Handshake")) {
@@ -303,4 +442,3 @@ object CdpInjection {
         return frame
     }
 }
-

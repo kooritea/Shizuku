@@ -85,6 +85,11 @@
     <string name="home_inject_vconsole_title">向调试中的webview注入vconsole</string>
     <string name="home_inject_vconsole_button_action">注入vConsole</string>
     <string name="home_inject_vconsole_description">通过Shizuku向当前调试的WebView注入vConsole，方便调试Web页面。</string>
+    <string name="vconsole_select_all">全选</string>
+    <string name="vconsole_deselect_all">取消全选</string>
+    <string name="vconsole_selected_count">已选择 %d 个页面</string>
+    <string name="vconsole_injecting">正在注入 vConsole…</string>
+    <string name="vconsole_result_summary">注入完成：成功 %1$d 个，失败 %2$d 个</string>
 
     <!-- Application management -->
     <string name="app_management_dialog_adb_is_limited_title">The permission of adb is limited</string>
