@@ -17,47 +17,57 @@
             android:layout_height="0dp"
             android:layout_weight="1">
 
-            <!-- 加载/错误状态 -->
-            <LinearLayout
-                android:id="@+id/status_container"
+            <!-- 页面列表及刷新容器 -->
+            <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+                android:id="@+id/swipe_refresh"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:gravity="center"
-                android:orientation="vertical"
-                android:padding="32dp"
-                android:visibility="gone">
+                android:layout_height="match_parent">
 
-                <com.google.android.material.progressindicator.CircularProgressIndicator
-                    android:id="@+id/progress"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:indeterminate="true"
-                    android:visibility="gone" />
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent">
 
-                <TextView
-                    android:id="@+id/status_text"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:textAppearance="?textAppearanceBodyLarge"
-                    android:gravity="center" />
-            </LinearLayout>
+                    <!-- 加载/错误状态，移入 SwipeRefreshLayout 以支持空状态下拉 -->
+                    <LinearLayout
+                        android:id="@+id/status_container"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:gravity="center"
+                        android:orientation="vertical"
+                        android:padding="32dp"
+                        android:visibility="gone">
 
-            <!-- 页面列表 -->
-            <rikka.widget.borderview.BorderRecyclerView
-                android:id="@+id/page_list"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:clipToPadding="false"
-                android:paddingStart="@dimen/rd_activity_horizontal_margin"
-                android:paddingEnd="@dimen/rd_activity_horizontal_margin"
-                android:scrollbarStyle="outsideOverlay"
-                android:scrollbars="vertical"
-                android:visibility="gone"
-                app:borderBottomVisibility="never"
-                app:borderTopDrawable="@null"
-                app:borderTopVisibility="never"
-                app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager" />
+                        <com.google.android.material.progressindicator.CircularProgressIndicator
+                            android:id="@+id/progress"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:indeterminate="true"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/status_text"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:textAppearance="?textAppearanceBodyLarge"
+                            android:gravity="center" />
+                    </LinearLayout>
+
+                    <rikka.widget.borderview.BorderRecyclerView
+                        android:id="@+id/page_list"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:clipToPadding="false"
+                        android:paddingStart="@dimen/rd_activity_horizontal_margin"
+                        android:paddingEnd="@dimen/rd_activity_horizontal_margin"
+                        android:scrollbarStyle="outsideOverlay"
+                        android:scrollbars="vertical"
+                        app:borderBottomVisibility="never"
+                        app:borderTopDrawable="@null"
+                        app:borderTopVisibility="never"
+                        app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager" />
+                </FrameLayout>
+            </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
         </FrameLayout>
 

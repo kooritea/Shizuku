@@ -65,7 +65,7 @@ class InjectVConsoleViewModel : ViewModel() {
                         val pages = CdpInjection.discoverPages(context, pid)
                         allPages.addAll(pages)
                     } catch (e: Exception) {
-                        // 跳过无法访问的进程
+                        android.util.Log.e("VConsole", "Failed to discover pages for pid $pid", e)
                     }
                 }
 

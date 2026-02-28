@@ -14,7 +14,8 @@ object SocketForwarder {
     @JvmStatic
     fun main(args: Array<String>) {
         val socketName = args[0]
-        val serverSocket = ServerSocket(0)
+        val targetPort = if (args.size > 1) args[1].toInt() else 0
+        val serverSocket = ServerSocket(targetPort)
         println(serverSocket.localPort)
         System.out.flush()
 

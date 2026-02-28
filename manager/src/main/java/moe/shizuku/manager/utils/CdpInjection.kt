@@ -161,6 +161,72 @@ object CdpInjection {
         }
     }
 
+    private var forwarderProcess: java.lang.Process? = null
+    private var adbClientForward: AdbClient? = null
+
+    suspend fun startForwarding(context: Context, pid: Int, targetPort: Int) {
+        stopForwarding() // 停止之前的转发（如果有）
+
+        if (Shizuku.getUid() == 0) {
+            val socketName = "webview_devtools_remote_$pid"
+            val apkPath = context.applicationInfo.sourceDir
+            // 此处使用的是原应用内的 SocketForwarder 工具，但如果是将其固定暴露到本地的 targetPort 端口需要专门的支持。
+            // 为了实现直接将 root 的 socket 转发到宿主机的 targetPort 上，我们用 socat / forwarder
+            // 然而, 因为 Shizuku 已经允许创建进程，最简单的实现是通过 socat 或者直接调用内置的代码。
+            // 假设我们使用现有的 SocketForwarder 或类似工具需要修改或者我们直接用一个 socat 命令（如果存在）。
+            // 鉴于目前已有的环境，如果你允许我们添加一个简单的端口转发器在 root，我们可以这么做。
+            // 暂作占位：需实现从 127.0.0.1:targetPort 到 abstract:webview_devtools_remote_$pid 的转发。
+            val process = Shizuku.newProcess(
+                arrayOf(
+                    "app_process",
+                    "-Djava.class.path=$apkPath",
+                    "/system/bin",
+                    "moe.shizuku.manager.utils.SocketForwarder",
+                    socketName,
+                    targetPort.toString() // 假设你修改了 SocketForwarder 接受第二个参数作为绑定的端口
+                ), null, null
+            )
+            forwarderProcess = process
+            // 保持进程运行...
+            process.waitFor()
+        } else {
+             val host = "127.0.0.1"
+             val port = run {
+                 val uidPort = discoverAdbPortByUid()
+                 if (uidPort > 0) return@run uidPort
+
+                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                     discoverAdbPort(context)
+                 } else {
+                     val p = EnvironmentUtils.getAdbTcpPort()
+                     if (p <= 0) throw Exception("ADB TCP port not found")
+                     p
+                 }
+             }
+             val pref = ShizukuSettings.getPreferences()
+             val key = AdbKey(PreferenceAdbKeyStore(pref), "shizuku")
+             val adbClient = AdbClient(host, port, key)
+             adbClient.connect()
+             val remoteDestination = "localabstract:webview_devtools_remote_$pid"
+             // AdbClient.createForward 需要创建一个持久的连接
+             adbClient.createForward(targetPort, remoteDestination)
+             adbClientForward = adbClient
+
+             // 保持协程挂起直到被取消
+             kotlinx.coroutines.awaitCancellation()
+        }
+    }
+
+    suspend fun stopForwarding() {
+        withContext(Dispatchers.IO) {
+            forwarderProcess?.destroy()
+            forwarderProcess = null
+
+            adbClientForward?.close()
+            adbClientForward = null
+        }
+    }
+
     // ---- 端口转发（Root） ----
 
     private fun <T> withPortForwardingRoot(context: Context, pid: Int, block: (Int) -> T): T {

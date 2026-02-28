@@ -90,6 +90,12 @@
     <string name="vconsole_selected_count">已选择 %d 个页面</string>
     <string name="vconsole_injecting">正在注入 vConsole…</string>
     <string name="vconsole_result_summary">注入完成：成功 %1$d 个，失败 %2$d 个</string>
+    <string name="vconsole_forward">转发到 9222</string>
+    <string name="vconsole_forwarding">端口转发中...</string>
+    <string name="vconsole_stop_forwarding">停止转发</string>
+    <string name="vconsole_forwarding_channel_name">WebView 端口转发</string>
+    <string name="vconsole_forwarding_channel_desc">显示 WebView 端口正在转发的状态</string>
+    <string name="vconsole_forwarding_needs_notification">应用在后台维持端口转发时需要发送持久通知。请授予通知权限。</string>
 
     <!-- Application management -->
     <string name="app_management_dialog_adb_is_limited_title">The permission of adb is limited</string>

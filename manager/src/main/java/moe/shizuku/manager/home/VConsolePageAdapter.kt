@@ -8,7 +8,8 @@ import moe.shizuku.manager.databinding.ItemVconsoleProcessHeaderBinding
 import moe.shizuku.manager.utils.CdpPage
 
 class VConsolePageAdapter(
-    private val onSelectionChanged: (List<CdpPage>) -> Unit
+    private val onSelectionChanged: (List<CdpPage>) -> Unit,
+    private val onForwardClicked: (Int) -> Unit
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
@@ -17,7 +18,7 @@ class VConsolePageAdapter(
     }
 
     sealed class ListItem {
-        data class Header(val processName: String, val pid: Int) : ListItem()
+        data class Header(val processName: String, val pid: Int, var isForwarding: Boolean = false) : ListItem()
         data class Page(val page: CdpPage, var selected: Boolean = false) : ListItem()
     }
 
@@ -32,6 +33,36 @@ class VConsolePageAdapter(
             pagesForPid.forEach { items.add(ListItem.Page(it)) }
         }
         notifyDataSetChanged()
+    }
+
+    fun setForwardingState(pid: Int, isForwarding: Boolean) {
+        items.forEachIndexed { index, item ->
+            if (item is ListItem.Header && item.pid == pid) {
+                if (item.isForwarding != isForwarding) {
+                    item.isForwarding = isForwarding
+                    notifyItemChanged(index)
+                }
+            } else if (item is ListItem.Header && isForwarding) {
+                 // 如果开始转发一个新的，把其他的状态重置（假设一个时间点只能转发一个）
+                 if (item.isForwarding) {
+                     item.isForwarding = false
+                     notifyItemChanged(index)
+                 }
+            }
+        }
+    }
+
+    fun resetAllForwardingStates() {
+        items.forEachIndexed { index, item ->
+            if (item is ListItem.Header && item.isForwarding) {
+                item.isForwarding = false
+                notifyItemChanged(index)
+            }
+        }
+    }
+
+    fun isForwarding(pid: Int): Boolean {
+        return items.filterIsInstance<ListItem.Header>().any { it.pid == pid && it.isForwarding }
     }
 
     fun getSelectedPages(): List<CdpPage> {
@@ -95,6 +126,14 @@ class VConsolePageAdapter(
     ) : RecyclerView.ViewHolder(binding.root) {
         fun bind(item: ListItem.Header) {
             binding.processName.text = "${item.processName} (PID: ${item.pid})"
+            if (item.isForwarding) {
+                binding.buttonForward.setText(moe.shizuku.manager.R.string.vconsole_stop_forwarding)
+            } else {
+                binding.buttonForward.setText(moe.shizuku.manager.R.string.vconsole_forward)
+            }
+            binding.buttonForward.setOnClickListener {
+                onForwardClicked(item.pid)
+            }
         }
     }
 
