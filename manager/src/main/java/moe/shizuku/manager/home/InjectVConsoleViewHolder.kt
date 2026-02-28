@@ -27,8 +27,13 @@ class InjectVConsoleViewHolder(binding: HomeInjectVconsoleBinding, root: View) :
     }
 
     init {
-        binding.buttonInjectVconsole.setOnClickListener { v: View ->
+        binding.cardVconsole.setOnClickListener { v: View ->
             v.context.startActivity(android.content.Intent(v.context, InjectVConsoleActivity::class.java))
+        }
+        binding.buttonInjectVconsole.setOnClickListener { v: View ->
+            val intent = android.content.Intent(v.context, InjectVConsoleActivity::class.java)
+            intent.putExtra(InjectVConsoleActivity.EXTRA_AUTO_INJECT_ALL, true)
+            v.context.startActivity(intent)
         }
     }
 

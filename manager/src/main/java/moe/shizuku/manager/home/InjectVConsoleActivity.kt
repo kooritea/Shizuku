@@ -22,6 +22,10 @@ import rikka.lifecycle.viewModels
 
 class InjectVConsoleActivity : AppBarActivity() {
 
+    companion object {
+        const val EXTRA_AUTO_INJECT_ALL = "extra_auto_inject_all"
+    }
+
     private val viewModel by viewModels { InjectVConsoleViewModel() }
     private lateinit var binding: ActivityInjectVconsoleBinding
     private lateinit var adapter: VConsolePageAdapter
@@ -95,7 +99,19 @@ class InjectVConsoleActivity : AppBarActivity() {
         viewModel.uiState.observe(this) { state ->
             when (state) {
                 is VConsoleUiState.Loading -> showLoading()
-                is VConsoleUiState.PageList -> showPageList(state.pages)
+                is VConsoleUiState.PageList -> {
+                    showPageList(state.pages)
+                    if (intent.getBooleanExtra(EXTRA_AUTO_INJECT_ALL, false)) {
+                        intent.removeExtra(EXTRA_AUTO_INJECT_ALL)
+                        if (state.pages.isNotEmpty()) {
+                            adapter.selectAll()
+                            viewModel.injectSelected(this, state.pages)
+                        } else {
+                            // 如果页面为空，直接显示一下提示
+                            showError("No inspectable pages found.")
+                        }
+                    }
+                }
                 is VConsoleUiState.Injecting -> showInjecting()
                 is VConsoleUiState.InjectionResult -> showResults(state.results)
                 is VConsoleUiState.Error -> showError(state.message)
