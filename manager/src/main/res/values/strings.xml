@@ -97,6 +97,21 @@
     <string name="vconsole_forwarding_channel_desc">显示 WebView 端口正在转发的状态</string>
     <string name="vconsole_forwarding_needs_notification">应用在后台维持端口转发时需要发送持久通知。请授予通知权限。</string>
 
+    <!-- User Scripts -->
+    <string name="script_list_title">选择注入脚本</string>
+    <string name="script_add">添加脚本</string>
+    <string name="script_name_hint">脚本名称</string>
+    <string name="script_code_hint">JavaScript 代码</string>
+    <string name="script_save">保存</string>
+    <string name="script_delete">删除</string>
+    <string name="script_edit">编辑</string>
+    <string name="script_empty">暂无脚本，点击右下角按钮添加</string>
+    <string name="script_inject_button">注入脚本</string>
+    <string name="script_confirm_inject">确认注入</string>
+    <string name="script_delete_confirm">确认删除此脚本？</string>
+    <string name="script_injecting">正在注入自定义脚本…</string>
+    <string name="script_injecting_named">正在注入脚本「%s」…</string>
+
     <!-- Application management -->
     <string name="app_management_dialog_adb_is_limited_title">The permission of adb is limited</string>
     <string name="app_management_dialog_adb_is_limited_message"><![CDATA[It\'s highly possible that your device manufacturer limits the permission of adb.<p>There may be a solution for your system in <b><a href=\"%1$s\">this document</a></b>.]]></string>

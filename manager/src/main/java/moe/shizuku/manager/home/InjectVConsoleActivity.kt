@@ -43,6 +43,23 @@ class InjectVConsoleActivity : AppBarActivity() {
         }
     }
 
+    private val scriptSelectLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val scriptId = result.data?.getStringExtra(ScriptListActivity.EXTRA_SELECTED_SCRIPT_ID)
+            if (scriptId != null) {
+                val script = UserScriptManager.getById(this, scriptId)
+                if (script != null) {
+                    val selected = adapter.getSelectedPages()
+                    if (selected.isNotEmpty()) {
+                        viewModel.injectCustomScript(this, selected, script.code, script.name)
+                    }
+                }
+            }
+        }
+    }
+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
@@ -92,6 +109,14 @@ class InjectVConsoleActivity : AppBarActivity() {
             }
         }
 
+        binding.buttonInjectScript.setOnClickListener {
+            val selected = adapter.getSelectedPages()
+            if (selected.isNotEmpty()) {
+                val intent = Intent(this, ScriptListActivity::class.java)
+                scriptSelectLauncher.launch(intent)
+            }
+        }
+
         viewModel.statusMessage.observe(this) { message ->
             binding.statusText.text = message
         }
@@ -112,7 +137,7 @@ class InjectVConsoleActivity : AppBarActivity() {
                         }
                     }
                 }
-                is VConsoleUiState.Injecting -> showInjecting()
+                is VConsoleUiState.Injecting -> showInjecting(state.scriptName)
                 is VConsoleUiState.InjectionResult -> showResults(state.results)
                 is VConsoleUiState.Error -> showError(state.message)
             }
@@ -178,10 +203,14 @@ class InjectVConsoleActivity : AppBarActivity() {
         updateBottomBar(emptyList())
     }
 
-    private fun showInjecting() {
+    private fun showInjecting(scriptName: String? = null) {
         binding.statusContainer.visibility = View.VISIBLE
         binding.progress.visibility = View.VISIBLE
-        binding.statusText.text = getString(R.string.vconsole_injecting)
+        binding.statusText.text = if (scriptName != null) {
+            getString(R.string.script_injecting_named, scriptName)
+        } else {
+            getString(R.string.vconsole_injecting)
+        }
         binding.statusText.visibility = View.VISIBLE
         binding.swipeRefresh.visibility = View.VISIBLE
         binding.pageList.visibility = View.GONE
@@ -266,5 +295,6 @@ class InjectVConsoleActivity : AppBarActivity() {
         val count = selectedPages.size
         binding.selectInfo.text = getString(R.string.vconsole_selected_count, count)
         binding.buttonInject.isEnabled = count > 0
+        binding.buttonInjectScript.isEnabled = count > 0
     }
 }

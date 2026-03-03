@@ -87,15 +87,15 @@ object CdpInjection {
     /**
      * 向选中的页面注入 vConsole（按 PID 分组处理）
      */
-    suspend fun injectIntoPages(context: Context, pages: List<CdpPage>): List<Pair<CdpPage, Boolean>> {
+    suspend fun injectIntoPages(context: Context, pages: List<CdpPage>, customScript: String? = null): List<Pair<CdpPage, Boolean>> {
         val results = mutableListOf<Pair<CdpPage, Boolean>>()
         val grouped = pages.groupBy { it.pid }
         for ((pid, pagesForPid) in grouped) {
             val pageIds = pagesForPid.map { it.pageId }.toSet()
             if (Shizuku.getUid() == 0) {
-                injectPagesViaRoot(context, pid, pageIds, pagesForPid, results)
+                injectPagesViaRoot(context, pid, pageIds, pagesForPid, results, customScript)
             } else {
-                injectPagesViaAdb(context, pid, pageIds, pagesForPid, results)
+                injectPagesViaAdb(context, pid, pageIds, pagesForPid, results, customScript)
             }
         }
         return results
@@ -103,12 +103,13 @@ object CdpInjection {
 
     private suspend fun injectPagesViaRoot(
         context: Context, pid: Int, pageIds: Set<String>,
-        originalPages: List<CdpPage>, results: MutableList<Pair<CdpPage, Boolean>>
+        originalPages: List<CdpPage>, results: MutableList<Pair<CdpPage, Boolean>>,
+        customScript: String? = null
     ) {
         withContext(Dispatchers.IO) {
             try {
                 withPortForwardingRoot(context, pid) { localPort ->
-                    injectMatchingPages(localPort, pageIds, originalPages, results)
+                    injectMatchingPages(localPort, pageIds, originalPages, results, customScript)
                 }
             } catch (e: Exception) {
                 originalPages.forEach { results.add(it to false) }
@@ -118,12 +119,13 @@ object CdpInjection {
 
     private suspend fun injectPagesViaAdb(
         context: Context, pid: Int, pageIds: Set<String>,
-        originalPages: List<CdpPage>, results: MutableList<Pair<CdpPage, Boolean>>
+        originalPages: List<CdpPage>, results: MutableList<Pair<CdpPage, Boolean>>,
+        customScript: String? = null
     ) {
         withContext(Dispatchers.IO) {
             try {
                 withPortForwardingAdb(context, pid) { localPort ->
-                    injectMatchingPages(localPort, pageIds, originalPages, results)
+                    injectMatchingPages(localPort, pageIds, originalPages, results, customScript)
                 }
             } catch (e: Exception) {
                 originalPages.forEach { results.add(it to false) }
@@ -133,7 +135,8 @@ object CdpInjection {
 
     private fun injectMatchingPages(
         localPort: Int, pageIds: Set<String>,
-        originalPages: List<CdpPage>, results: MutableList<Pair<CdpPage, Boolean>>
+        originalPages: List<CdpPage>, results: MutableList<Pair<CdpPage, Boolean>>,
+        customScript: String? = null
     ) {
         val liveCdpPages = try {
             getRawCdpPages(localPort)
@@ -153,7 +156,7 @@ object CdpInjection {
                 continue
             }
             try {
-                injectJsIntoPage(wsUrl, JS_SCRIPT)
+                injectJsIntoPage(wsUrl, customScript ?: JS_SCRIPT)
                 results.add(page to true)
             } catch (e: Exception) {
                 results.add(page to false)

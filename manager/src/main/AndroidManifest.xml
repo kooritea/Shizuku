@@ -42,11 +42,9 @@
 
     <permission
         android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
-        android:protectionLevel="signature"
-        tools:node="remove" />
+        android:protectionLevel="signature" />
     <uses-permission
-        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
-        tools:node="remove" />
+        android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
 
     <application
         android:name=".ShizukuApplication"
@@ -104,6 +102,9 @@
         <activity
             android:name=".home.InjectVConsoleActivity"
             android:label="@string/home_inject_vconsole_title" />
+        <activity
+            android:name=".home.ScriptListActivity"
+            android:label="@string/script_list_title" />
         <activity
             android:name=".authorization.RequestPermissionActivity"
             android:directBootAware="true"

@@ -16,7 +16,7 @@ import rikka.shizuku.Shizuku
 sealed class VConsoleUiState {
     object Loading : VConsoleUiState()
     data class PageList(val pages: List<CdpPage>) : VConsoleUiState()
-    data class Injecting(val selected: List<CdpPage>) : VConsoleUiState()
+    data class Injecting(val selected: List<CdpPage>, val scriptName: String? = null) : VConsoleUiState()
     data class InjectionResult(val results: List<Pair<CdpPage, Boolean>>) : VConsoleUiState()
     data class Error(val message: String) : VConsoleUiState()
 }
@@ -87,6 +87,19 @@ class InjectVConsoleViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val results = CdpInjection.injectIntoPages(context, selectedPages)
+                _uiState.postValue(VConsoleUiState.InjectionResult(results))
+            } catch (e: Exception) {
+                _uiState.postValue(VConsoleUiState.Error("注入失败: ${e.message}"))
+            }
+        }
+    }
+
+    fun injectCustomScript(context: Context, selectedPages: List<CdpPage>, scriptCode: String, scriptName: String) {
+        _uiState.value = VConsoleUiState.Injecting(selectedPages, scriptName)
+
+        viewModelScope.launch {
+            try {
+                val results = CdpInjection.injectIntoPages(context, selectedPages, scriptCode)
                 _uiState.postValue(VConsoleUiState.InjectionResult(results))
             } catch (e: Exception) {
                 _uiState.postValue(VConsoleUiState.Error("注入失败: ${e.message}"))
